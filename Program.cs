@@ -10,15 +10,16 @@ internal class Program
     private static void Main(string[] args)
     {
         //Configuration to be completed:
-        string IpAddress = "192.168.1.2"; // The IP address where Dump1090 is running. 
+        string IpAddress = "127.0.0.1"; // The IP address where Dump1090 is running. 
         const int TCPPort = 30003; // Default 30003
         const double myLat = -37.8102; //Reciever Latitude in decimal format
         const double myLon = 144.9628; //Reciever Longitude in decimal format
         const double myAltitudeInMeters = 41; //Receiver Altitude in Meters
+ 
         const bool logData = false; //Log Dump1090 data in a file
 
-        const int UpdateFrequencySeconds = 1; //How often to redraw the chart and update displayed data
-        const int MaximumAgeSeconds = 60; //How long to keep a plane in view after no data is received for that plane
+        const double UpdateFrequencySeconds = .5; //How often to redraw the chart and update displayed data
+        const int MaximumAgeSeconds = 5; //How long to keep a plane in view after no data is received for that plane
 
         //Conversion constants
         const double FeetToMetersRatio = 0.3048;
@@ -268,7 +269,7 @@ internal class Program
         }
 
         static void RenderChart(char[,] chart ) {
-        Console.Clear();
+        
         Console.SetCursorPosition(0,0);
             for (int y = 0; y < chart.GetLength(1); y++)
             {
