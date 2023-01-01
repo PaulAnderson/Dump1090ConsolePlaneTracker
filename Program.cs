@@ -2,6 +2,7 @@
 using System.Linq.Expressions;
 using System.Net;
 using System.Net.Sockets;
+using System.Numerics;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -12,6 +13,7 @@ internal class Program
         //Configuration to be completed:
         string IpAddress = "127.0.0.1"; // The IP address where Dump1090 is running. 
         const int TCPPort = 30003; // Default 30003
+
         const double myLat = -37.8102; //Reciever Latitude in decimal format
         const double myLon = 144.9628; //Reciever Longitude in decimal format
         const double myAltitudeInMeters = 41; //Receiver Altitude in Meters
@@ -27,12 +29,15 @@ internal class Program
         //Shared Variables
         var hexFlights = new Dictionary<string,string>();
         var planeData = new Dictionary<string,PlaneData>();
+        var chartScale = 1.0d;
 
         //Connect to Dump1090
         IPAddress ipAddress = IPAddress.Parse(IpAddress);
         IPEndPoint endPoint = new IPEndPoint(ipAddress, TCPPort);
         Socket socket = new Socket(ipAddress.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
         socket.Connect(endPoint);
+
+        Console.WriteLine($"Connected to {IpAddress}:{TCPPort}");
 
         var displayRendered = DateTime.Now;
         // Read data from the socket
@@ -108,9 +113,12 @@ internal class Program
                                 if (string.IsNullOrEmpty(plane.FlightNumber)) {
                                     plane.FlightNumber = flightNo;
                                 }
-                                plane.LastSeen = DateTime.Now;
                                 plane.Latitude = latitude;
                                 plane.Longitude = longitude;
+
+                                plane.LastSeen = DateTime.Now;
+                                plane.LocationUpdated = DateTime.Now;
+
                                 //plane.speedKnots = 
                                 //TODO calculate ground speed based on time and position
                             }
@@ -127,13 +135,32 @@ internal class Program
 
             }
 
+            //Get key presses
+            if (Console.KeyAvailable)
+            {
+                ConsoleKeyInfo key = Console.ReadKey(true);
+                if (key.KeyChar == '+')
+                {
+                    chartScale /= 1.5;
+                    if (chartScale <= .01) chartScale = .01;
+                    displayRendered = DateTime.Now.AddSeconds(-UpdateFrequencySeconds);
+                }
+                else if (key.KeyChar == '-')
+                {
+                    chartScale *= 1.5;
+                    if (chartScale >= 128) chartScale = 128;
+                    displayRendered = DateTime.Now.AddSeconds(-UpdateFrequencySeconds);
+                }
+            }
+
             //Show all visible planes on a graph
             if (planeData.Count>0 && DateTime.Now.Subtract(displayRendered).TotalSeconds>UpdateFrequencySeconds)
             {
                 var planes = planeData.Values.ToList<PlaneData>();
-                char[,] chart = PopulateChart(planes, 100, 50);
+                char[,] chart = PopulateChart(planes, 100, 50, chartScale);
                 RenderChart(chart);
-                
+
+                Console.WriteLine($"Chart Scale: 1 char = {chartScale:F2} KM   (Use +/- keys to change");
 
                 foreach (var plane in planes)
                 {
@@ -206,11 +233,12 @@ internal class Program
             public double AltitudeFeet {get; set; }
             public double SpeedKnots { get; set; }
             public DateTime LastSeen {get; set; }
+            public DateTime? LocationUpdated { get; set; }
             public double DistanceKM {get; set; }
             public double BearingDegrees {get; set; }
             public double ElevationAngleDegrees { get; set; }
         }
-        static char[,] PopulateChart(IEnumerable<PlaneData> planes, int chartWidth, int chartHeight)
+        static char[,] PopulateChart(IEnumerable<PlaneData> planes, int chartWidth, int chartHeight, double scale)
         {
             // Cr+eate a chart with the specified dimensions
             char[,] chart = new char[chartWidth, chartHeight];
@@ -224,8 +252,8 @@ internal class Program
                     if ((x==0 || x==chartWidth-1) || (y==0 || y==chartHeight-1))
                     chart[x, y] = '.';
 
+                }
             }
-        }
 
             // Calculate the center of the chart
             int centerX = chartWidth / 2;
@@ -234,8 +262,11 @@ internal class Program
             // Plot the location of each plane on the chart
             foreach (PlaneData plane in planes)
             {
+                //dont display planes that have no location data
+                if (!plane.LocationUpdated.HasValue) continue;
+
                 //TODO scale plane distance
-                double distance = plane.DistanceKM/2;
+                double distance = plane.DistanceKM/scale;
                 var xScaleFactor = 2;
                 var yScaleFactor = 1;
 
@@ -257,7 +288,6 @@ internal class Program
 
                     for (int c=0; c<plane.FlightNumber.Length && x+c+1 < chartWidth; c++)
                     {
-                     
                         chart[x + c + 1, y] = plane.FlightNumber[c];
                     }
                 }
