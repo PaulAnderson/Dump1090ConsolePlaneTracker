@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Drawing;
 using System.Linq.Expressions;
 using System.Net;
 using System.Net.Sockets;
@@ -17,7 +18,7 @@ internal class Program
         const double myLat = -37.8102; //Reciever Latitude in decimal format
         const double myLon = 144.9628; //Reciever Longitude in decimal format
         const double myAltitudeInMeters = 41; //Receiver Altitude in Meters
- 
+
         const bool logData = false; //Log Dump1090 data in a file
 
         const double UpdateFrequencySeconds = .5; //How often to redraw the chart and update displayed data
@@ -27,8 +28,8 @@ internal class Program
         const double FeetToMetersRatio = 0.3048;
 
         //Shared Variables
-        var hexFlights = new Dictionary<string,string>();
-        var planeData = new Dictionary<string,PlaneData>();
+        var hexFlights = new Dictionary<string, string>();
+        var planeData = new Dictionary<string, PlaneData>();
         var chartScale = 1.0d;
 
         //Connect to Dump1090
@@ -37,6 +38,7 @@ internal class Program
         Socket socket = new Socket(ipAddress.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
         socket.Connect(endPoint);
 
+        Console.Clear();
         Console.WriteLine($"Connected to {IpAddress}:{TCPPort}");
 
         var displayRendered = DateTime.Now;
@@ -57,13 +59,13 @@ internal class Program
             }
 
             //TODO ensure whole lines are read from the buffer                     
-            var lines = data.Split("\n\r".ToCharArray(),StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                foreach (string line in lines)
+            var lines = data.Split("\n\r".ToCharArray(), StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            foreach (string line in lines)
             {
                 // Split the line into fields
                 string[] fields = line.Split(',');
                 if (fields.Length < 16) continue;
-                if (fields[0]!="MSG") continue;
+                if (fields[0] != "MSG") continue;
 
                 // Parse the message type
                 int type = int.Parse(fields[1]);
@@ -76,18 +78,18 @@ internal class Program
                         //Parse message type 1 All-Call Reply message
                         string flight = fields[10]?.Trim() ?? "";
 
-                        if (!string.IsNullOrEmpty(flight) && ! hexFlights.ContainsKey(hex)) {
-                            hexFlights.Add(hex,flight);
+                        if (!string.IsNullOrEmpty(flight) && !hexFlights.ContainsKey(hex)) {
+                            hexFlights.Add(hex, flight);
                             //Console.WriteLine($"All-Call Reply received. Enrolled Flight {flight} as hex {hex}");
                         }
-                        if (!string.IsNullOrEmpty(flight) && ! planeData.ContainsKey(hex)) {
-                            planeData.Add(hex,new PlaneData() {HexCode = hex, FlightNumber = flight});
+                        if (!string.IsNullOrEmpty(flight) && !planeData.ContainsKey(hex)) {
+                            planeData.Add(hex, new PlaneData() { HexCode = hex, FlightNumber = flight, LastSeen = DateTime.Now }) ;
                             //Console.WriteLine($"All-Call Reply received. Enrolled Flight {flight} as hex {hex}");
                         }
                         break;
 
                     case 3:
-                        
+
                         // Parse message type 3 Short Air-to-Air Surveillance (AAS) message
                         string dateTime1 = fields[5];
                         string dateTime2 = fields[6];
@@ -99,16 +101,16 @@ internal class Program
                             double altitudeMeters = altitudeFeet * FeetToMetersRatio;
 
                             string flightNo = "";
-                            hexFlights.TryGetValue(hex,out flightNo);
+                            hexFlights.TryGetValue(hex, out flightNo);
 
-                            double distanceKM = Distance(myLat,myLon,latitude,longitude);
-                            double bearing = Heading(myLat,myLon,latitude,longitude);
-                            double verticalAngle = VerticalAngle(myAltitudeInMeters,altitudeMeters,distanceKM);
+                            double distanceKM = Distance(myLat, myLon, latitude, longitude);
+                            double bearing = Heading(myLat, myLon, latitude, longitude);
+                            double verticalAngle = VerticalAngle(myAltitudeInMeters, altitudeMeters, distanceKM);
 
-                            if (planeData.TryGetValue(hex,out var plane)) {
+                            if (planeData.TryGetValue(hex, out var plane)) {
                                 plane.AltitudeFeet = altitudeFeet;
                                 plane.BearingDegrees = bearing;
-                                plane.DistanceKM=distanceKM;
+                                plane.DistanceKM = distanceKM;
                                 plane.ElevationAngleDegrees = verticalAngle;
                                 if (string.IsNullOrEmpty(plane.FlightNumber)) {
                                     plane.FlightNumber = flightNo;
@@ -153,162 +155,211 @@ internal class Program
                 }
             }
 
+            //Remove planes not seen for a while 
+            bool planesRemoved = false;
+            foreach (var plane in planeData.Values.ToList<PlaneData>())  
+            {
+                if (DateTime.Now.Subtract(plane.LastSeen).TotalSeconds > MaximumAgeSeconds)
+                {
+                    planeData.Remove(plane.HexCode);
+                    
+                }
+            }
+            if (planesRemoved) Console.Clear(); 
+
             //Show all visible planes on a graph
-            if (planeData.Count>0 && DateTime.Now.Subtract(displayRendered).TotalSeconds>UpdateFrequencySeconds)
+            if (DateTime.Now.Subtract(displayRendered).TotalSeconds > UpdateFrequencySeconds)
             {
                 var planes = planeData.Values.ToList<PlaneData>();
-                char[,] chart = PopulateChart(planes, 100, 50, chartScale);
+                CharColor[,] chart = PopulateChart(planes, 100, 50, chartScale);
                 RenderChart(chart);
 
                 Console.WriteLine($"Chart Scale: 1 char = {chartScale:F2} KM   (Use +/- keys to change");
 
+                //List all visible planes
                 foreach (var plane in planes)
                 {
                     Console.WriteLine($"Time: {plane.LastSeen}, Distance {plane.DistanceKM:F2} KM, Bearing {plane.BearingDegrees:F2}° , Elevation Angle: {plane.ElevationAngleDegrees:F2}° , Hex: {plane.HexCode}, Flight {plane.FlightNumber}, Latitude: {plane.Latitude}, Longitude: {plane.Longitude}, Altitude: {plane.AltitudeFeet} ft, Speed: {plane.SpeedKnots} kts");
-                    if (DateTime.Now.Subtract(plane.LastSeen).TotalSeconds > MaximumAgeSeconds)
-                    {
-                        planeData.Remove(plane.HexCode);
-                    }
                 }
 
                 displayRendered = DateTime.Now;
             }
-            
+
         }
     }
 
-        static double Distance(double lat1, double lon1, double lat2, double lon2)
+    static double Distance(double lat1, double lon1, double lat2, double lon2)
+    {
+        // Convert the latitude and longitude values to radians
+        lat1 = ToRadians(lat1);
+        lon1 = ToRadians(lon1);
+        lat2 = ToRadians(lat2);
+        lon2 = ToRadians(lon2);
+
+        // Calculate the difference between the longitudes
+        double dlon = lon2 - lon1;
+
+        // Calculate the distance using the Haversine formula
+        double a = Math.Pow(Math.Sin(dlon / 2), 2) + Math.Cos(lat1) * Math.Cos(lat2) * Math.Pow(Math.Sin((lat2 - lat1) / 2), 2);
+        double c = 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
+        double d = 6371 * c; // 6371 is the radius of the Earth in kilometers
+
+        return d;
+    }
+
+    static double Heading(double lat1, double lon1, double lat2, double lon2) {
+        // Calculate the heading using the inverse tangent
+        double dlon = lon2 - lon1;
+        double y = Math.Sin(dlon) * Math.Cos(lat2);
+        double x = Math.Cos(lat1) * Math.Sin(lat2) - Math.Sin(lat1) * Math.Cos(lat2) * Math.Cos(dlon);
+        var heading = ToDegrees(Math.Atan2(y, x));
+        if (heading < 0)
         {
-            // Convert the latitude and longitude values to radians
-            lat1 = ToRadians(lat1);
-            lon1 = ToRadians(lon1);
-            lat2 = ToRadians(lat2);
-            lon2 = ToRadians(lon2);
-
-            // Calculate the difference between the longitudes
-            double dlon = lon2 - lon1;
-
-            // Calculate the distance using the Haversine formula
-            double a = Math.Pow(Math.Sin(dlon / 2), 2) + Math.Cos(lat1) * Math.Cos(lat2) * Math.Pow(Math.Sin((lat2 - lat1) / 2), 2);
-            double c = 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
-            double d = 6371 * c; // 6371 is the radius of the Earth in kilometers
-
-            return d;
+            heading += 360;
         }
+        return heading;
+    }
 
-        static double Heading(double lat1, double lon1, double lat2, double lon2) {
-             // Calculate the heading using the inverse tangent
-            double dlon = lon2 - lon1;
-            double y = Math.Sin(dlon) * Math.Cos(lat2);
-            double x = Math.Cos(lat1) * Math.Sin(lat2) - Math.Sin(lat1) * Math.Cos(lat2) * Math.Cos(dlon);
-            var heading = ToDegrees(Math.Atan2(y, x));
-            if (heading < 0)
+    static double VerticalAngle(double alt1_meters, double alt2_meters, double distanceKM) {
+        var vertical_angle = Math.Atan((alt2_meters - alt1_meters) / (distanceKM * 1000));
+        var vertical_angle_degrees = ToDegrees(vertical_angle);
+        return vertical_angle_degrees;
+    }
+
+    static double ToRadians(double deg)
+    {
+        return deg * Math.PI / 180;
+    }
+    static double ToDegrees(double rad)
+    {
+        return rad * 180 / Math.PI;
+    }
+
+    /// Text mode map renderer
+    class PlaneData {
+        public string HexCode { get; set; }
+        public string FlightNumber { get; set; }
+        public double Latitude { get; set; }
+        public double Longitude { get; set; }
+        public double AltitudeFeet { get; set; }
+        public double SpeedKnots { get; set; }
+        public DateTime LastSeen { get; set; }
+        public DateTime? LocationUpdated { get; set; }
+        public double DistanceKM { get; set; }
+        public double BearingDegrees { get; set; }
+        public double ElevationAngleDegrees { get; set; }
+    }
+    public readonly record struct CharColor(char Character, Color Color);
+     
+    static CharColor[,] PopulateChart(IEnumerable<PlaneData> planes, int chartWidth, int chartHeight, double scale)
+    {
+        // Altitude scale
+        Color[] altitudeColors = { Color.Red, Color.Yellow, Color.Green, Color.Blue, Color.Indigo, Color.Violet };
+        Color defaultColor = Color.Gray;
+        // Calculate the range of altitudes represented by each color
+        const double maxAltitude = 40000;
+        const double minAltitude = 0;
+        double altitudeRange = (maxAltitude - minAltitude) / altitudeColors.Length;
+
+
+        // Create a chart with the specified dimensions
+        CharColor[,] chart = new CharColor[chartWidth, chartHeight];
+
+        // Set all elements of the chart to a space character
+        for (int x = 0; x < chartWidth; x++)
+        {
+            for (int y = 0; y < chartHeight; y++)
             {
-                heading += 360;
+                if ((x==0 || x==chartWidth-1) || (y==0 || y==chartHeight-1))
+                chart[x, y] = new CharColor('.', defaultColor);
             }
-            return heading;
         }
 
-        static double VerticalAngle(double alt1_meters,double alt2_meters,double distanceKM) {
-            var vertical_angle = Math.Atan((alt2_meters - alt1_meters) / (distanceKM*1000));
-            var vertical_angle_degrees = ToDegrees(vertical_angle);
-            return vertical_angle_degrees;
-        }
+        // Calculate the center of the chart
+        int centerX = chartWidth / 2;
+        int centerY = chartHeight / 2;
 
-        static double ToRadians(double deg)
+        // Plot the location of each plane on the chart
+        foreach (PlaneData plane in planes)
         {
-            return deg * Math.PI / 180;
-        }
-         static double ToDegrees(double rad)
-        {
-            return rad * 180 / Math.PI;
-        }
+            //dont display planes that have no location data
+            if (!plane.LocationUpdated.HasValue) continue;
 
-        /// Text mode map renderer
-        class PlaneData {
-            public string HexCode { get; set; }
-            public string FlightNumber {get; set; }
-            public double Latitude  {get; set; }
-            public double Longitude {get; set; }
-            public double AltitudeFeet {get; set; }
-            public double SpeedKnots { get; set; }
-            public DateTime LastSeen {get; set; }
-            public DateTime? LocationUpdated { get; set; }
-            public double DistanceKM {get; set; }
-            public double BearingDegrees {get; set; }
-            public double ElevationAngleDegrees { get; set; }
-        }
-        static char[,] PopulateChart(IEnumerable<PlaneData> planes, int chartWidth, int chartHeight, double scale)
-        {
-            // Cr+eate a chart with the specified dimensions
-            char[,] chart = new char[chartWidth, chartHeight];
+            //TODO scale plane distance
+            double distance = plane.DistanceKM/scale;
+            var xScaleFactor = 2;
+            var yScaleFactor = 1;
 
-            // Set all elements of the chart to a space character
-            for (int x = 0; x < chartWidth; x++)
+            // Calculate the coordinates of the plane on the chart
+            double bearingRadians = ToRadians(plane.BearingDegrees);
+            int x = (int)(centerX + distance * xScaleFactor * Math.Sin(bearingRadians));
+            int y = (int)(centerY - distance * yScaleFactor * Math.Cos(bearingRadians));
+
+            //Off-chart planes shown at edge
+            if (x<0) x=0;
+            if (x>chartWidth-1) x = chartWidth-1;
+            if (y<0) y=0;
+            if (y>chartHeight-1) y = chartHeight-1;
+
+            // Map the plane's altitude to a color within the altitude scale
+            int colorIndex = (int)((plane.AltitudeFeet - minAltitude) / altitudeRange);
+            if (colorIndex > altitudeColors.GetUpperBound(0))
+                colorIndex= altitudeColors.GetUpperBound(0);
+            Color color = altitudeColors[colorIndex];
+
+            // Plot the plane on the chart if the coordinates are within the bounds of the chart
+            if (x >= 0 && x < chartWidth && y >= 0 && y < chartHeight)
             {
-                for (int y = 0; y < chartHeight; y++)
-                {
-                    chart[x, y] = ' ';
-                    if ((x==0 || x==chartWidth-1) || (y==0 || y==chartHeight-1))
-                    chart[x, y] = '.';
+                chart[x, y] = new CharColor('*', color);
 
+                for (int c=0; c<plane.FlightNumber.Length && x+c+1 < chartWidth; c++)
+                {
+                    chart[x + c + 1, y] = new CharColor(plane.FlightNumber[c], color);
                 }
             }
-
-            // Calculate the center of the chart
-            int centerX = chartWidth / 2;
-            int centerY = chartHeight / 2;
-
-            // Plot the location of each plane on the chart
-            foreach (PlaneData plane in planes)
-            {
-                //dont display planes that have no location data
-                if (!plane.LocationUpdated.HasValue) continue;
-
-                //TODO scale plane distance
-                double distance = plane.DistanceKM/scale;
-                var xScaleFactor = 2;
-                var yScaleFactor = 1;
-
-                // Calculate the coordinates of the plane on the chart
-                double bearingRadians = ToRadians(plane.BearingDegrees);
-                int x = (int)(centerX + distance * xScaleFactor * Math.Sin(bearingRadians));
-                int y = (int)(centerY - distance * yScaleFactor * Math.Cos(bearingRadians));
-
-                //Off-chart planes shown at edge
-                if (x<0) x=0;
-                if (x>chartWidth-1) x = chartWidth-1;
-                if (y<0) y=0;
-                if (y>chartHeight-1) y = chartHeight-1;
-
-                // Plot the plane on the chart if the coordinates are within the bounds of the chart
-                if (x >= 0 && x < chartWidth && y >= 0 && y < chartHeight)
-                {
-                    chart[x, y] = '*';
-
-                    for (int c=0; c<plane.FlightNumber.Length && x+c+1 < chartWidth; c++)
-                    {
-                        chart[x + c + 1, y] = plane.FlightNumber[c];
-                    }
-                }
-            }
-
-        chart[centerX, centerY] = '+';
-
-            return chart;
         }
 
-        static void RenderChart(char[,] chart ) {
-        
+        chart[centerX, centerY] = new CharColor('+', defaultColor);
+
+        return chart;
+    }
+
+    public static System.ConsoleColor FromColor(System.Drawing.Color c)
+    {
+        int index = (c.R > 128 | c.G > 128 | c.B > 128) ? 8 : 0; // Bright bit
+        index |= (c.R > 64) ? 4 : 0; // Red bit
+        index |= (c.G > 64) ? 2 : 0; // Green bit
+        index |= (c.B > 64) ? 1 : 0; // Blue bit
+        return (System.ConsoleColor)index;
+    }
+
+    static void RenderChart(CharColor[,] chart ) {
+
+        Console.ResetColor();
+        var currentConsoleColor = Console.ForegroundColor;
         Console.SetCursorPosition(0,0);
-            for (int y = 0; y < chart.GetLength(1); y++)
+
+        for (int y = 0; y < chart.GetLength(1); y++)
+        {
+            for (int x = 0; x < chart.GetLength(0); x++)
             {
-                for (int x = 0; x < chart.GetLength(0); x++)
+                ConsoleColor newColor = FromColor(chart[x, y].Color);
+                
+                if (newColor != currentConsoleColor )
                 {
-                    Console.Write(chart[x, y]);
+                    Console.ForegroundColor = newColor;
+                    currentConsoleColor= newColor;
                 }
-                Console.WriteLine();
-            }       
+
+                if (chart[x, y].Character == '\0')
+                    Console.Write(' ');
+                else
+                    Console.Write(chart[x, y].Character);
+            }
+            Console.WriteLine();
         }
+        Console.ResetColor();
 
     }
+
+}
